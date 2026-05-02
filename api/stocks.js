@@ -51,12 +51,14 @@ async function supabaseQuery(path, options = {}) {
 }
 
 // ─── Helper: ดึงจาก Finnhub แล้ว upsert ลง DB ───
-async function fetchFromFinnhubAndSave(symbols) {
+async function fetchFromFinnhubAndSave(symbols, isCustom = false) {
   if (!FINNHUB_KEY) throw new Error('FINNHUB_API_KEY not configured');
 
-  const stockList = symbols
-    .map(sym => STOCKS.find(s => s.symbol === sym))
-    .filter(Boolean);
+  // รองรับทั้ง symbol ที่อยู่ใน STOCKS list และที่ไม่อยู่ (custom search)
+  const stockList = symbols.map(sym => {
+    const known = STOCKS.find(s => s.symbol === sym);
+    return known ?? { symbol: sym, name: sym, sector: 'Other' };
+  });
 
   const results = await Promise.allSettled(
     stockList.map(async (stock) => {
@@ -86,6 +88,8 @@ async function fetchFromFinnhubAndSave(symbols) {
         volume:     null,
         data_date:  new Date().toISOString().split('T')[0],
         updated_at: new Date().toISOString(),
+        is_custom:  isCustom,
+        created_at: new Date().toISOString(),
       };
     })
     .filter(Boolean);
@@ -133,16 +137,27 @@ export default async function handler(req, res) {
     let allRows = [...(dbRows || [])];
 
     // 3. ถ้ามี symbol ที่ไม่มีใน DB → fallback Finnhub
+    // ถ้าเป็น symbol นอก STOCKS list → is_custom = true
     if (missingSymbols.length > 0) {
-      const fetched = await fetchFromFinnhubAndSave(missingSymbols);
-      allRows = [...allRows, ...fetched];
+      const knownSymbols  = new Set(STOCKS.map(s => s.symbol));
+      const customSymbols = missingSymbols.filter(s => !knownSymbols.has(s));
+      const normalMissing = missingSymbols.filter(s =>  knownSymbols.has(s));
+
+      if (normalMissing.length > 0) {
+        const fetched = await fetchFromFinnhubAndSave(normalMissing, false);
+        allRows = [...allRows, ...fetched];
+      }
+      if (customSymbols.length > 0) {
+        const fetched = await fetchFromFinnhubAndSave(customSymbols, true);
+        allRows = [...allRows, ...fetched];
+      }
     }
 
     if (!allRows.length) {
       return res.status(502).json({ error: 'ไม่ได้รับข้อมูล' });
     }
 
-    // 4. map กลับเป็น format เดิมที่ stocks.html ใช้ (ไม่ต้องแก้ frontend)
+    // 4. map กลับเป็น format ที่ stocks.html ใช้
     const result = allRows.map(r => ({
       symbol:                     r.symbol,
       name:                       r.name,
@@ -159,6 +174,7 @@ export default async function handler(req, res) {
       fiftyTwoWeekHigh:           r.high_day,
       fiftyTwoWeekLow:            r.low_day,
       dataDate:                   r.data_date,
+      isCustom:                   r.is_custom ?? false,
     }));
 
     return res.status(200).json({ quoteResponse: { result, error: null } });

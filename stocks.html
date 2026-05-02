@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="th">
 <head>
+  <link rel="icon" type="image/x-icon" href="favicon.ico">
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>รายการหุ้น — StockWise</title>
@@ -29,7 +30,7 @@
 
     .search-box input {
       width: 100%;
-      padding: 0.65rem 1rem 0.65rem 2.5rem;
+      padding: 0.65rem 2.75rem 0.65rem 1rem;
       border: 1.5px solid var(--border);
       border-radius: var(--radius-sm);
       background: var(--card);
@@ -42,15 +43,20 @@
 
     .search-box input:focus { border-color: var(--accent-light); }
 
-    .search-box::before {
-      content: '🔍';
+    .search-box-btn {
       position: absolute;
-      left: 0.75rem;
-      top: 50%;
-      transform: translateY(-50%);
-      font-size: 0.9rem;
-      pointer-events: none;
+      right: 0; top: 0; bottom: 0;
+      width: 40px;
+      background: var(--accent);
+      border: none;
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+      color: #fff;
+      font-size: 0.95rem;
+      cursor: pointer;
+      transition: background 0.15s;
     }
+
+    .search-box-btn:hover { background: var(--accent-dark); }
 
     .filter-tabs {
       display: flex;
@@ -310,7 +316,8 @@
   <!-- TOOLBAR -->
   <div class="toolbar">
     <div class="search-box">
-      <input type="text" id="searchInput" placeholder="ค้นหา symbol หรือชื่อบริษัท..." oninput="filterStocks()" />
+      <input type="text" id="searchInput" placeholder="ค้นหา symbol หรือชื่อบริษัท..." onkeydown="if(event.key==='Enter') handleSearch()" />
+      <button class="search-box-btn" onclick="handleSearch()" title="ค้นหา">🔍</button>
     </div>
     <div class="filter-tabs">
       <button class="filter-tab active" onclick="setFilter('all', this)">ทั้งหมด</button>
@@ -333,7 +340,7 @@
           <th onclick="sortTable('change')">เปลี่ยนแปลง ↕</th>
           <th onclick="sortTable('changePct')">% ↕</th>
           <th>Sector</th>
-          <th onclick="sortTable('mktCap')">Mkt Cap ↕</th>
+          <th onclick="sortTable('dataDate')">วันที่ ↕</th>
         </tr>
       </thead>
       <tbody id="stockTableBody">
@@ -410,39 +417,31 @@ async function loadStocks() {
   document.getElementById('lastUpdated').textContent = '';
   showSkeletons();
 
-  const symbols = STOCKS.map(s => s.symbol).join(',');
-
   try {
-    // เรียก /api/stocks (Vercel serverless proxy) แทนการเรียก Yahoo Finance โดยตรง
-    const res = await fetch(`/api/stocks?symbols=${symbols}`);
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || `HTTP ${res.status}`);
-    }
-
+    const res  = await fetch('/api/stocks');
     const json = await res.json();
+
+    if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+
     const quotes = json?.quoteResponse?.result ?? [];
+    if (!quotes.length) throw new Error('ไม่ได้รับข้อมูล');
 
-    if (!quotes.length) throw new Error('ไม่ได้รับข้อมูลจาก Yahoo Finance');
-
-    allData = STOCKS.map(s => {
-      const q = quotes.find(r => r.symbol === s.symbol) || {};
-      return {
-        symbol:    s.symbol,
-        name:      s.name,
-        sector:    s.sector,
-        price:     q.regularMarketPrice            ?? null,
-        change:    q.regularMarketChange           ?? null,
-        changePct: q.regularMarketChangePercent    ?? null,
-        volume:    q.regularMarketVolume           ?? null,
-        mktCap:    q.marketCap                     ?? null,
-        high52:    q.fiftyTwoWeekHigh              ?? null,
-        low52:     q.fiftyTwoWeekLow               ?? null,
-        open:      q.regularMarketOpen             ?? null,
-        prevClose: q.regularMarketPreviousClose    ?? null,
-      };
-    });
+    allData = quotes.map(q => ({
+      symbol:    q.symbol,
+      name:      q.name,
+      sector:    q.sector,
+      price:     q.regularMarketPrice         ?? null,
+      change:    q.regularMarketChange        ?? null,
+      changePct: q.regularMarketChangePercent ?? null,
+      volume:    q.regularMarketVolume        ?? null,
+      mktCap:    null,
+      high52:    q.regularMarketDayHigh       ?? null,
+      low52:     q.regularMarketDayLow        ?? null,
+      open:      q.regularMarketOpen          ?? null,
+      prevClose: q.regularMarketPreviousClose ?? null,
+      dataDate:  q.dataDate                   ?? null,
+      isCustom:  q.isCustom                   ?? false,
+    }));
 
     renderTable();
     const now = new Date().toLocaleTimeString('th-TH');
@@ -466,6 +465,64 @@ async function loadStocks() {
   }
 }
 
+// ─── SEARCH (รองรับ symbol นอก list → ดึง API + save DB) ───
+async function handleSearch() {
+  const input = document.getElementById('searchInput');
+  const query = input.value.trim();
+  if (!query) { renderTable(); return; }
+
+  const queryUpper = query.toUpperCase();
+
+  // ถ้ามีใน allData อยู่แล้ว แค่ pin ขึ้นบนสุด
+  const existing = allData.find(s =>
+    s.symbol === queryUpper || s.name.toLowerCase().includes(query.toLowerCase())
+  );
+  if (existing) {
+    existing._pinned = true;
+    renderTable();
+    return;
+  }
+
+  // ไม่มีใน allData → ดึง API (backend จะ save ลง DB อัตโนมัติ)
+  document.getElementById('statusText').textContent = `กำลังค้นหา ${queryUpper}...`;
+  try {
+    const res  = await fetch(`/api/stocks?symbols=${queryUpper}`);
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+
+    const quotes = json?.quoteResponse?.result ?? [];
+    if (!quotes.length) throw new Error(`ไม่พบข้อมูลหุ้น ${queryUpper}`);
+
+    quotes.forEach(q => {
+      if (!allData.find(s => s.symbol === q.symbol)) {
+        allData.push({
+          symbol:    q.symbol,
+          name:      q.name      || q.symbol,
+          sector:    q.sector    || 'Other',
+          price:     q.regularMarketPrice         ?? null,
+          change:    q.regularMarketChange        ?? null,
+          changePct: q.regularMarketChangePercent ?? null,
+          volume:    null,
+          mktCap:    null,
+          high52:    q.regularMarketDayHigh       ?? null,
+          low52:     q.regularMarketDayLow        ?? null,
+          open:      q.regularMarketOpen          ?? null,
+          prevClose: q.regularMarketPreviousClose ?? null,
+          dataDate:  q.dataDate                   ?? null,
+          isCustom:  true,
+          _pinned:   true,
+        });
+      }
+    });
+
+    document.getElementById('statusText').textContent = `แสดง ${allData.length} หุ้น`;
+    renderTable();
+
+  } catch (e) {
+    document.getElementById('statusText').textContent = `⚠️ ${e.message}`;
+  }
+}
+
 function showSkeletons() {
   const rows = Array.from({ length: 8 }, () =>
     `<tr>${Array(7).fill('<td><div class="skeleton" style="height:16px;border-radius:4px"></div></td>').join('')}</tr>`
@@ -482,17 +539,13 @@ function renderTable() {
     data = data.filter(s => s.sector === currentFilter);
   }
 
-  // Filter by search
-  const q = document.getElementById('searchInput').value.toLowerCase();
-  if (q) {
-    data = data.filter(s =>
-      s.symbol.toLowerCase().includes(q) || s.name.toLowerCase().includes(q)
-    );
-  }
+  // Pin หุ้นที่ค้นหาขึ้นบนสุด
+  const pinned   = data.filter(s => s._pinned);
+  const unpinned = data.filter(s => !s._pinned);
 
-  // Sort
+  // Sort unpinned
   if (sortKey) {
-    data.sort((a, b) => {
+    unpinned.sort((a, b) => {
       const av = a[sortKey] ?? (sortAsc ? Infinity : -Infinity);
       const bv = b[sortKey] ?? (sortAsc ? Infinity : -Infinity);
       return sortAsc
@@ -501,6 +554,8 @@ function renderTable() {
     });
   }
 
+  data = [...pinned, ...unpinned];
+
   if (!data.length) {
     document.getElementById('stockTableBody').innerHTML =
       `<tr><td colspan="7" style="text-align:center;padding:2rem;color:var(--text-muted)">ไม่พบหุ้นที่ค้นหา</td></tr>`;
@@ -508,15 +563,18 @@ function renderTable() {
   }
 
   document.getElementById('stockTableBody').innerHTML = data.map(s => {
-    const pct  = s.changePct ?? 0;
-    const dir  = pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat';
+    const pct   = s.changePct ?? 0;
+    const dir   = pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat';
     const arrow = dir === 'up' ? '▲' : dir === 'down' ? '▼' : '─';
-    const capStr = s.mktCap ? formatCap(s.mktCap) : '—';
+    // ชื่อย่อหุ้นที่ค้นหาใหม่ → สีส้มเข้ม
+    const symbolStyle = s.isCustom
+      ? 'color:#C85A00;font-weight:800;'
+      : '';
 
     return `
       <tr onclick="openModal('${s.symbol}')">
         <td>
-          <div class="stock-symbol">${s.symbol}</div>
+          <div class="stock-symbol" style="${symbolStyle}">${s.symbol}</div>
         </td>
         <td>
           <div style="font-size:0.875rem">${s.name}</div>
@@ -537,16 +595,9 @@ function renderTable() {
           </span>
         </td>
         <td><span class="sector-tag">${s.sector}</span></td>
-        <td style="color:var(--text-muted);font-size:0.85rem">${capStr}</td>
+        <td style="color:var(--text-muted);font-size:0.85rem">${s.dataDate ?? '—'}</td>
       </tr>`;
   }).join('');
-}
-
-function formatCap(n) {
-  if (n >= 1e12) return `$${(n / 1e12).toFixed(2)}T`;
-  if (n >= 1e9)  return `$${(n / 1e9).toFixed(2)}B`;
-  if (n >= 1e6)  return `$${(n / 1e6).toFixed(2)}M`;
-  return `$${n}`;
 }
 
 // ─── FILTER & SORT ───
@@ -556,8 +607,6 @@ function setFilter(f, el) {
   el.classList.add('active');
   renderTable();
 }
-
-function filterStocks() { renderTable(); }
 
 function sortTable(key) {
   if (sortKey === key) sortAsc = !sortAsc;
