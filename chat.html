@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="th">
 <head>
-  <link rel="icon" type="image/x-icon" href="favicon.ico">
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>แชทกับ AI — StockWise</title>
@@ -28,9 +27,46 @@
     }
 
     .chat-sidebar-header {
-      padding: 1.25rem 1.5rem;
+      padding: 1rem 1.25rem;
       border-bottom: 1px solid var(--border);
       background: var(--egg);
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+    }
+
+    .back-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      border-radius: var(--radius-sm);
+      background: var(--card);
+      border: 1.5px solid var(--border);
+      color: var(--accent);
+      font-size: 1rem;
+      text-decoration: none;
+      flex-shrink: 0;
+      transition: all 0.15s;
+    }
+
+    .back-btn:hover {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+
+    .sidebar-header-text h3 {
+      font-family: 'Playfair Display', serif;
+      font-size: 1rem;
+      color: var(--accent-dark);
+    }
+
+    .sidebar-header-text p {
+      font-size: 0.75rem;
+      color: var(--text-light);
+      margin-top: 0.1rem;
     }
 
     .chat-sidebar-header h3 {
@@ -322,8 +358,11 @@
   <!-- SIDEBAR -->
   <div class="chat-sidebar">
     <div class="chat-sidebar-header">
-      <h3>🤖 StockWise AI</h3>
-      <p>ผู้ช่วยด้านการเทรดหุ้นและการลงทุน</p>
+      <a href="index.html" class="back-btn" title="กลับหน้าหลัก">🏠</a>
+      <div class="sidebar-header-text">
+        <h3>StockWise AI</h3>
+        <p>ผู้ช่วยด้านการเทรดหุ้นและการลงทุน</p>
+      </div>
     </div>
 
     <!-- Model Selector -->
@@ -559,7 +598,18 @@ function showError(msg, color = 'red') {
 
 function hideError() { document.getElementById('errorMsg').style.display = 'none'; }
 
-function clearChat() {
+async function clearChat() {
+  // ลบประวัติใน DB ก่อน
+  try {
+    await fetch(`/api/chat?session_id=${SESSION_ID}`, { method: 'DELETE' });
+  } catch (e) {
+    console.warn('[clearChat] DB delete failed:', e);
+  }
+
+  // สร้าง session ใหม่ (ทำให้ประวัติเก่าหายถาวร แม้ลบ DB ไม่สำเร็จ)
+  SESSION_ID = crypto.randomUUID();
+  localStorage.setItem('stockwise_session_id', SESSION_ID);
+
   messages = [];
   const wrap = document.getElementById('chatMessages');
   wrap.innerHTML = `
@@ -569,8 +619,6 @@ function clearChat() {
       <p>ถามคำถามเกี่ยวกับการเทรดหุ้น การอ่านกราฟ เทคนิคต่าง ๆ หรือแนวคิดการลงทุนได้เลยครับ</p>
       <p style="margin-top:0.5rem;font-size:0.8rem;color:var(--text-light)">⚠️ AI ไม่แนะนำหุ้นเฉพาะเจาะจง เนื้อหาเพื่อการศึกษาเท่านั้น</p>
     </div>`;
-  // หมายเหตุ: ไม่ลบ session ออกจาก DB เพราะแค่ clear หน้าจอ
-  // ถ้าอยากลบประวัติถาวร สามารถเพิ่ม endpoint DELETE /api/chat?session_id=xxx ได้ในอนาคต
 }
 
 function usePrompt(text) {
